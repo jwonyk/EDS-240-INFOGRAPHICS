@@ -13,11 +13,11 @@ EDS-240-INFOGRAPHICS
 └── .gitignore
 └── EDS-240-INFOGRAPHICS.Rproj
 └── README.md
-└── data/              
-└── R/           
-└── figures/           
-└── infographic/       
-└── blog/
+└── data/              # Planned to upload later
+└── R/                 # Planned to upload later
+└── figures/           # Planned to upload later
+└── infographic/       # Planned to upload later
+└── blog/              # Planned to upload later
 ```
 
 ## Data Access

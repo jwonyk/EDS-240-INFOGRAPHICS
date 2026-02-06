@@ -1,3 +1,9 @@
+# Ignore html files
+exploration_files/
+
+# Ignore temp file
+.DS_Store
+
 # Data files
 data/
 

@@ -13,9 +13,9 @@ EDS-240-INFOGRAPHICS
 └── .gitignore
 └── EDS-240-INFOGRAPHICS.Rproj
 └── README.md
-└── data/              # Planned to upload later
+└── figures/
+└── data/              # Exist in local machine, not in repository
 └── R/                 # Planned to upload later
-└── figures/           # Planned to upload later
 └── infographic/       # Planned to upload later
 └── blog/              # Planned to upload later
 ```

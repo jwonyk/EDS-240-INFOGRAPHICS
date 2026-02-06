@@ -1,0 +1,248 @@
+---
+title: "FPM #2: Exploratory Data Visualization"
+author: "Jay Kim"
+date: "February 4, 2026"
+format: html
+editor_options: 
+  chunk_output_type: inline
+---
+
+## Tracking the Rise of Boba Shops in the U.S.
+
+Over the past two decades, bubble tea, or boba, has grown from a niche drink to a cultural staple in many U.S. cities. From small local shops to major chains, boba has become part of the everyday food landscape.
+
+For this project, I wanted to explore a simple question:
+
+*Are new boba shops still opening at an increasing rate, or has growth begun to slow down?*
+
+To investigate, I used the *Yelp Open Dataset*, which contains information about businesses and reviews across the United States. While Yelp does not provide official business opening dates, review timestamps allow us to estimate when shops first appeared on the platform.
+
+## Load in Libraries
+
+```{r}
+#| message: false
+#| warning: false
+
+# Packages
+library(tidyverse)
+library(jsonlite)
+library(readr)
+library(lubridate)
+library(here)
+library(duckdb)
+library(dplyr)
+```
+
+```{r load-and-filter}
+#| message: false
+#| warning: false
+
+# --------------------------
+# 1) Read businesses + filter to boba
+# --------------------------
+
+# Load Yelp business-level `json` data (one row per business)
+biz <- stream_in(file(here("data", "yelp_academic_dataset_business.json")),
+                 verbose = FALSE)
+
+# Filter businesses that appear to be boba / bubble tea shops
+# Find cities with at least 5 boba shops
+boba_biz <- biz %>%
+  filter(str_detect(categories, regex("\\bBubble Tea\\b|\\bBoba\\b", 
+                                      ignore_case = TRUE)) |
+           str_detect(name, regex("\\bboba\\b|bubble\\s*tea|milk\\s*tea", 
+                                  ignore_case = TRUE))) %>%
+  distinct(business_id, .keep_all = TRUE)
+
+five_more_boba <- boba_biz %>%
+  count(state, city) %>%
+  filter(n >= 5) %>%
+  select(state, city)
+
+# Keep only those cities
+boba_biz <- boba_biz %>%
+  semi_join(five_more_boba, by = c("state", "city"))
+
+# Extract the list of boba store IDs & will be used to match review record
+boba_ids <- as.character(boba_biz$business_id)
+```
+
+```{r scan-review-file}
+#| message: false
+#| warning: false
+#| eval: false
+
+# --------------------------
+# 2) Chunked scan of reviews to find earliest review date per business
+# --------------------------
+
+# Create an empty named vector to store each business's earliest review date
+min_dates <- setNames(as.Date(character()), character())
+
+# Approximate when a shop first appeared on Yelp
+process_review_lines <- function(lines, pos) {
+  
+  if (length(lines) == 0) return()
+  
+  for (line in lines) {
+    if (!grepl('"business_id"', line, fixed = TRUE)) next
+    
+    tryCatch({
+      
+      row <- fromJSON(line)
+      if (!row$business_id %in% boba_ids) next
+      
+      biz_id <- row$business_id
+      date <- as.Date(row$date)
+      if (is.na(date)) next
+      
+      if (biz_id %in% names(min_dates)) {
+        
+        min_dates[biz_id] <<- min(min_dates[biz_id], date)
+        
+      } else {
+        
+        min_dates[biz_id] <<- date
+        
+      }
+      
+    }, error = function(e) NULL)
+    
+  }
+  
+  if (pos %% 200000 == 0) {
+    
+    message("Processed ~", pos, " lines; matched: ", length(min_dates))
+    
+  }
+  
+}
+
+# Read the massive review file in chunks
+read_lines_chunked(
+  file = here("data", "yelp_academic_dataset_review.json"),
+  callback = SideEffectChunkCallback$new(process_review_lines),
+  chunk_size = 200000)
+
+# Convert earliest review dates into a tidy data frame
+boba_first_seen <- tibble(
+  business_id = names(min_dates),
+  first_review_date = as.Date(min_dates)) %>%
+  mutate(first_review_year = year(first_review_date))
+
+# Save results so you don't need to rescan the huge review file again
+saveRDS(boba_first_seen, here("data", "boba_first_seen.rds"))
+```
+
+```{r load-first-seen}
+# --------------------------
+# 2.5) Chunked scan of reviews saved as rds to load in faster
+# --------------------------
+
+# Load the saved output instead of rescanning the full review file
+boba_first_seen <- readRDS(here("data", "boba_first_seen.rds"))
+```
+
+```{r join-year-data}
+#| message: false
+#| warning: false
+
+# --------------------------
+# 3) Join year back onto businesses + summarize new shops per year
+# --------------------------
+
+# Join the estimated first-review year back to the business table
+boba_with_year <- boba_biz %>%
+  left_join(boba_first_seen, by = "business_id") %>%
+  filter(!is.na(first_review_year)) %>% 
+  select(-starts_with("attributes"),
+         -starts_with("hours"))
+```
+
+```{r new-boba-year}
+#| message: false
+#| warning: false
+#| fig-align: "center"
+
+# --------------------------
+# 4) Plot 1: New boba shops per year
+# --------------------------
+new_per_year <- boba_with_year %>%
+  count(first_review_year) %>%
+  arrange(first_review_year)
+
+ggplot(new_per_year, aes(x = first_review_year, y = n)) +
+  geom_line() +
+  geom_point() +
+  labs(title = "New boba shops appearing each year",
+       x = "Year", 
+       y = "New Shops") +
+  theme_classic() +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r growth-per-year}
+#| message: false
+#| warning: false
+#| fig-align: "center"
+
+# --------------------------
+# 5) Plot 2: Growth over time
+# --------------------------
+
+# Compute cumulative growth in boba shops over time
+new_per_year <- new_per_year %>%
+  mutate(cumulative = cumsum(n))
+
+ggplot(new_per_year, aes(x = first_review_year, y = cumulative)) +
+  geom_line() +
+  geom_point() +
+  labs(title = "Cumulative Boba Shop Growth Over Time",
+       x = "Year", 
+       y = "Total Shops") +
+  theme_classic() +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r top-cities}
+#| message: false
+#| warning: false
+#| fig-align: "center"
+
+# --------------------------
+# 6) Compare top cities over time
+# --------------------------
+
+# Identify the top 5 cities with the most boba shops overall
+top_cities <- boba_with_year %>%
+  count(city, state) %>%
+  top_n(5, n) %>%
+  mutate(city_state = paste(city, state, sep = ", "))
+
+# Compare how boba shop growth has changed over time in these cities
+boba_with_year %>%
+  inner_join(top_cities 
+             %>% select(city, state, city_state), 
+             by = c("city", "state")) %>%
+  count(first_review_year, city_state) %>%
+  ggplot(aes(x = first_review_year, y = n, color = city_state)) +
+  geom_line() +
+  labs(title = "New Boba Shops by Top Cities",
+       x = "Year", y = "New Shops", color = "City") +
+  theme_classic() +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+## Answer Question
+
+1.  What have you learned about your data? Have any potentially interesting patterns emerged? Point to specific visualizations that you created as you describe your findings.
+
+-   I learned that the Yelp Open Dataset contains detailed business metadata (categories, location, reviews) but does not provide a true business opening date, so I used the earliest review date as a proxy for when a boba shop first appeared on Yelp. My initial visualizations suggest strong growth over time: the “New boba shops appearing each year” plot shows an overall increase in new listings, and the cumulative growth plot highlights steady expansion year over year. However, the geographic patterns are less clear than expected, which suggests that Yelp’s dataset coverage may be incomplete or uneven across regions.
+
+2.  In FPM #1, you outlined some questions that you wanted to answer using these data. Have you made any strides towards answering those questions? If yes, how so? If no, what next steps do you need to take (e.g. I need to create X plot type, I still need to track down Y data, I need to restructure existing data so that you can visualize it in Z ways, etc.)? Have any new questions emerged?
+
+-   Yes, I have made progress toward answering my first FPM questions by estimating the number of new boba shops per year and visualizing whether the number of openings is increasing or decreasing over time. The time-series and cumulative plots suggest that boba shop listings have grown substantially in recent years, and the city-level comparison begins to explore geographic variation. Next steps include refining my filtering approach, improving the accessibility and design of my visualizations for the final infographic, and expanding the geographic analysis. New questions have emerged about how Yelp review activity and platform coverage shape which businesses appear in the dataset, especially in regions where boba is known to be abundant. Also, I would like to know if there is an average of reviews with a higher score when there is less boba shops vs more boba shops around the city.
+
+3.  What challenges do you foresee encountering with your data? These can be data wrangling and / or visualization challenges.
+
+-   A major challenge is that the Yelp Open Dataset is not a complete representation of all boba shops, which limits geographic conclusions. Even in places where boba is widely popular (such as parts of California, including Orange County, Los Angeles, San Diego, and the Bay Area), the dataset may not contain enough listings to reflect the true density of shops. In addition, “opening year” must be approximated using first review dates rather than actual business opening records, and category-based filtering may miss or misclassify businesses. Because of these limitations, I may need to explore additional data sources (such as local business licensing or health inspection records) to better contextualize boba shop distribution and strengthen the validity of geographic patterns in the final infographic.
